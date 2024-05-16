@@ -1,0 +1,89 @@
+with metrics as (
+select
+	distinct card as client_id,
+	date(max(datetime)) as r_date,
+	date '2022-06-01' as analysis_date,
+	date(max(datetime)) - date '2022-06-01' as date_diff,
+	count(distinct datetime) as f_date,
+	sum(summ) as total_spend
+from bonuscheques b  
+group by 1
+)
+
+,rfm_data as (
+select 
+	client_id,
+	r_date,
+	date_diff,
+	f_date,
+	total_spend
+from metrics
+)
+
+,coef as (
+select
+	percentile_disc(0.33) within group (order by date_diff) as recency_1,
+	percentile_disc(0.66) within group (order by date_diff) as recency_2,
+	percentile_disc(0.99) within group (order by date_diff) as recency_3,
+	percentile_disc(0.33) within group (order by f_date) as frequency_1,
+	percentile_disc(0.66) within group (order by f_date) as frequency_2,
+	percentile_disc(0.99) within group (order by f_date) as frequency_3,
+	percentile_disc(0.33) within group (order by total_spend) as monetary_1,
+	percentile_disc(0.66) within group (order by total_spend) as monetary_2,
+	percentile_disc(0.99) within group (order by total_spend) as monetary_3
+from rfm_data
+)
+
+, rfm as (
+select 
+client_id,
+case 
+	when date_diff < recency_1 then '1'
+	when date_diff <  recency_2 then '2'
+	else '3' end as recency,
+case 
+	when f_date < frequency_1 then '1'
+	when f_date <  frequency_2 then '2'
+	else '3' end as frequency,
+case 
+	when total_spend < monetary_1 then '1'
+	when total_spend <  monetary_2 then '2'
+	else '3' end as monetary
+from rfm_data, coef
+)
+
+,res as (
+select 
+	client_id,
+	recency,
+	frequency,
+	monetary,
+	recency || frequency || monetary as rfm_segment
+from rfm
+),
+
+segmentation as (
+select
+	r.client_id,
+	recency,
+	frequency,
+	monetary,
+    rfm_segment,
+    r_date as last_purchase_date,
+    f_date as date_diff,
+    total_spend,
+    CASE
+        WHEN rfm_segment IN ('121', '122', '123') THEN 'Loyalists'
+        WHEN rfm_segment IN ('131', '132', '133') THEN 'Potential Loyalists'
+        WHEN rfm_segment IN ('221', '222', '223') THEN 'Promising'
+        WHEN rfm_segment IN ('231', '232', '233') THEN 'Need Attention'
+        WHEN rfm_segment IN ('321', '322', '323') THEN 'About to Sleep'
+        WHEN rfm_segment IN ('331', '332', '333') THEN 'At Risk'
+        ELSE 'Unknown Segment'
+    END AS Segment_Name
+FROM
+    res r join rfm_data rfm on 
+    r.client_id = rfm.client_id
+)
+
+select * from segmentation
